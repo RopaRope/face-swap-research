@@ -37,7 +37,7 @@ from skin_tone import SkinToneMatcher
 
 ROOT = paths.ROOT
 DEFAULT_SWAPPER = paths.model("inswapper_128.onnx")
-LABEL = ("")
+LABEL = ("video")
 
 
 def providers() -> list:

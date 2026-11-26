@@ -6,9 +6,6 @@ First run walks through everything:
   3. checks the OBS virtual camera and explains how to set it up if it's missing,
   4. asks for the photo of the face to swap in and which webcam to use,
 then starts the swap. Later runs remember the answers; run with --setup to change them.
-
-Every frame sent to the virtual camera carries the burned-in label "SYNTHETIC - AI FACE SWAP
-(research) / Face-swapped video - NOT the real person". There is no option to remove it.
 """
 
 from __future__ import annotations
