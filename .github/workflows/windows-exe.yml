@@ -1,0 +1,20 @@
+# Builds the Windows app on GitHub's Windows machines (they have the C++ build tools insightface
+# needs). Run it from the Actions tab; download FaceSwapResearch-windows from the run's artifacts.
+# models/parsing_bisenet.onnx (53 MB) is committed as a normal file (under GitHub's 100 MB limit).
+name: windows-exe
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        shell: cmd
+        run: windows\build.bat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapResearch-windows
+          path: dist/FaceSwapResearch

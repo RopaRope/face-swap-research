@@ -1,0 +1,16 @@
+# Environments and build output
+.venv/
+.venv-win/
+__pycache__/
+build/
+dist/
+.DS_Store
+
+# Personal photos and test outputs: never committed
+faces/
+out*.jpg
+
+# Model weights: downloaded by the app (licensed for non-commercial research).
+# Only the converted face parser ships with the Windows app.
+models/*
+!models/parsing_bisenet.onnx

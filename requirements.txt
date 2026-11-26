@@ -1,0 +1,11 @@
+numpy
+opencv-python
+onnxruntime
+insightface
+onnxconverter-common
+mediapipe
+torch
+torchvision
+gfpgan
+facexlib
+pyvirtualcam

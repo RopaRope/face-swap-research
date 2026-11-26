@@ -1,0 +1,20 @@
+# Windows app (no PyTorch: the face parser runs as ONNX, the GFPGAN enhancer is left out).
+# insightface is installed separately with --no-deps (see build.bat) so it doesn't pull in the
+# CPU-only onnxruntime on top of onnxruntime-directml.
+numpy==2.5.5
+opencv-python==5.1.0.95
+onnxruntime-directml==1.24.4
+onnx
+mediapipe==0.10.31
+pyvirtualcam==0.15.0
+pygrabber==0.2
+comtypes
+# insightface's own dependencies
+requests
+scikit-image
+scipy
+tqdm
+prettytable
+easydict
+cython
+pyinstaller==6.22.3
