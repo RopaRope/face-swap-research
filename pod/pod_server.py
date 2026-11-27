@@ -39,7 +39,8 @@ from skin_tone import SkinSegmenter, SkinToneMatcher     # noqa: E402
 class Swapper:
     """The frame-aligned pipeline (same as `swap_live.py --aligned`), safe to call from threads."""
 
-    def __init__(self, source: str, det_size: int, skin_strength: float, enhance: float):
+    def __init__(self, source: str, det_size: int, skin_strength: float, enhance: float,
+                 body_skin: bool = False):
         print("providers:", sl.providers(), flush=True)
         self.app, self.swapper = sl.load_models(sl.DEFAULT_SWAPPER, det_size, fp16=False)
         self.src = sl.source_face(self.app, source)
@@ -50,6 +51,7 @@ class Swapper:
         if enhance > 0:     # GFPGAN restores the 128 px swap to a sharp 512 px face, every frame
             from enhance import FaceEnhancer
             self.enhancer = FaceEnhancer(weight=enhance, parser=self.parser)
+        self.body_skin = body_skin   # MediaPipe body mask: ~120 ms of CPU per frame, only for neck/arms
         self.local = threading.local()
         self.lock = threading.Lock()
 
@@ -60,7 +62,13 @@ class Swapper:
 
     def __call__(self, bgr: np.ndarray) -> np.ndarray:
         faces = sl.detect(self.app, bgr)
-        body = self._segmenter().skin_prob(bgr) if self.skin is not None and faces else None
+        body = None
+        if self.skin is not None and faces:
+            if self.body_skin:
+                body = self._segmenter().skin_prob(bgr)
+            else:   # face/ears/neck still come from the GPU face parser
+                h, w = bgr.shape[:2]
+                body = np.zeros((max(1, h * 256 // w), 256), np.float32)
         out = bgr
         if faces:
             if self.skin is not None:
@@ -99,6 +107,7 @@ def run_once(args, swap: Swapper):
     vout.bit_rate = args.bitrate
     vout.options = {"preset": "veryfast", "tune": "zerolatency", "g": str(args.fps)}
     vout.time_base = vin.time_base
+    vout.codec_context.time_base = vin.time_base   # input clock: paced frames never share a tick
     aout = None
     if ain:
         aout = out.add_stream("aac", rate=ain.codec_context.sample_rate)
@@ -109,6 +118,8 @@ def run_once(args, swap: Swapper):
     pending: collections.deque = collections.deque()     # (video pts, future)
     audio_q: collections.deque = collections.deque()     # decoded audio frames waiting for video
     last_vpts_s = -1.0
+    last_pts = None
+    next_t = -1.0          # pacing: take frames on an even time grid so motion doesn't stutter
     shown = dropped = 0
     t_stat = time.time()
 
@@ -118,10 +129,13 @@ def run_once(args, swap: Swapper):
                 out.mux(p)
 
     def drain(block: bool):
-        nonlocal last_vpts_s, shown
+        nonlocal last_vpts_s, shown, last_pts
         while pending and (block or pending[0][1].done()):
             pts, fut = pending.popleft()
             img = fut.result()
+            if last_pts is not None and pts <= last_pts:   # encoder needs strictly rising timestamps
+                continue
+            last_pts = pts
             frame = av.VideoFrame.from_ndarray(img, format="bgr24")
             frame.pts, frame.time_base = pts, vin.time_base
             t_s = pts * float(vin.time_base)
@@ -146,6 +160,10 @@ def run_once(args, swap: Swapper):
             for vf in pkt.decode():
                 if vf.pts is None:
                     continue
+                t = vf.pts * float(vin.time_base)
+                if args.fps and t < next_t:
+                    continue
+                next_t = max(next_t + 1.0 / args.fps, t - 0.5 / args.fps) if args.fps else 0
                 if len(pending) >= args.workers * 2:     # behind: drop this video frame, keep audio
                     dropped += 1
                     continue
@@ -174,17 +192,20 @@ def main():
     ap.add_argument("--source", required=True, help="photo of the consenting person whose face is swapped in")
     ap.add_argument("--input", default="rtsp://127.0.0.1:8554/live")
     ap.add_argument("--output", default="rtsp://127.0.0.1:8554/swapped")
-    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--fps", type=int, default=12,
+                    help="frames per second taken from the webcam stream, evenly spaced")
     ap.add_argument("--bitrate", type=int, default=1_200_000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--det-size", type=int, default=320)
     ap.add_argument("--skin", type=float, default=1.0)
+    ap.add_argument("--body-skin", action="store_true",
+                    help="also recolour neck/arms/hands with MediaPipe (costs ~120 ms CPU per frame)")
     ap.add_argument("--enhance", type=float, default=1.0,
                     help="GFPGAN face restoration strength (0 = off, 1 = full)")
     ap.add_argument("--max-lag", type=float, default=1.0,
                     help="seconds audio may run ahead of video before it is sent anyway")
     args = ap.parse_args()
-    swap = Swapper(args.source, args.det_size, args.skin, args.enhance)
+    swap = Swapper(args.source, args.det_size, args.skin, args.enhance, args.body_skin)
     swap(np.zeros((720, 1280, 3), np.uint8))       # warm up GPU kernels before the stream starts
     print("ready: waiting for OBS to stream to path 'live'", flush=True)
     while True:
