@@ -26,6 +26,8 @@ _STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
 def _device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 
 

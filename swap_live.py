@@ -46,9 +46,10 @@ _DEFAULT_LABEL = ("SYNTHETIC - AI FACE SWAP (research)",
 
 def providers() -> list:
     avail = ort.get_available_providers()
-    # CoreML on Apple Silicon; DirectML on Windows (any DirectX 12 GPU, Intel iGPUs included).
-    return [p for p in ("CoreMLExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider")
-            if p in avail]
+    # CUDA on NVIDIA (the Runpod server); CoreML on Apple Silicon; DirectML on Windows (any
+    # DirectX 12 GPU, Intel iGPUs included).
+    return [p for p in ("CUDAExecutionProvider", "CoreMLExecutionProvider", "DmlExecutionProvider",
+                        "CPUExecutionProvider") if p in avail]
 
 
 def load_models(swapper_path: Path, det_size: int, fp16: bool = True):
@@ -83,10 +84,10 @@ def load_parser():
     onnx_path = paths.model("parsing_bisenet.onnx")
     try:
         import torch
-        mps = torch.backends.mps.is_available()
+        gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
     except ImportError:
-        mps = False
-    if onnx_path.exists() and not mps:
+        gpu = False
+    if onnx_path.exists() and not gpu:
         from face_parse import OnnxFaceParser
         return OnnxFaceParser(onnx_path, [p for p in providers() if p != "CoreMLExecutionProvider"])
     from enhance import FaceParser
