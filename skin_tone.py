@@ -129,6 +129,48 @@ def _parsed_face_skin(frame: np.ndarray, face, parser, size: int = 384):
     return m, zone
 
 
+def _landmark_limit(shape, face, scale: float = 0.25) -> np.ndarray:
+    """Where recolouring may go at most, from the eyes and mouth (which the detector always
+    finds): forehead, cheeks, ears, chin and upper neck. Outside it nothing is recoloured, so
+    the parser's stray hair/scalp/shirt/background patches can't show."""
+    h, w = shape[:2]
+    k = face.kps.astype(np.float32)
+    eye = (k[0] + k[1]) / 2
+    mouth = (k[3] + k[4]) / 2
+    d = float(np.linalg.norm(k[1] - k[0])) + 1e-3        # eye distance
+    v = mouth - eye                                         # points down the face
+    vl = float(np.linalg.norm(v)) + 1e-3
+    u = v / vl
+    ang = float(np.degrees(np.arctan2(u[0], u[1])))         # head roll
+    top = eye - 1.25 * vl * u                               # forehead, below the hairline
+    bot = mouth + 1.05 * vl * u                             # just under the chin (not the collar)
+    c = (top + bot) / 2 * scale
+    half_h = float(np.linalg.norm(bot - top)) / 2 * scale
+    half_w = 1.30 * d * scale                               # out to the ears
+    sh, sw = max(int(h * scale), 1), max(int(w * scale), 1)
+    m = np.zeros((sh, sw), np.float32)
+    cv2.ellipse(m, (int(c[0]), int(c[1])), (max(int(half_w), 1), max(int(half_h), 1)),
+                -ang, 0, 360, 1.0, -1)
+    # Neck: a column under the chin, narrower than the face so it stays off collar and shoulders,
+    # fading out downward so there is no hard line where the colouring stops.
+    perp = np.array([u[1], -u[0]], np.float32)
+    n_top, n_bot = mouth + 0.6 * vl * u, mouth + 2.1 * vl * u
+    nw_top, nw_bot = 0.80 * d, 0.95 * d
+    neck = np.zeros_like(m)
+    poly = np.array([n_top + perp * nw_top, n_top - perp * nw_top,
+                     n_bot - perp * nw_bot, n_bot + perp * nw_bot]) * scale
+    cv2.fillConvexPoly(neck, poly.astype(np.int32), 1.0)
+    ys, xs = np.mgrid[0:sh, 0:sw].astype(np.float32)
+    t = ((xs / scale - mouth[0]) * u[0] + (ys / scale - mouth[1]) * u[1]) / vl   # chin-down distance
+    neck *= np.clip((2.1 - t) / 0.8, 0, 1)
+    m = np.maximum(m, neck)
+    kf = max(int(0.25 * d * scale) | 1, 3)
+    m = cv2.GaussianBlur(m, (kf, kf), 0)
+    below = np.clip((t - 0.9) / 0.4, 0, 1)                  # 0 on the face, 1 below the chin
+    return (cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR),
+            cv2.resize(below, (w, h), interpolation=cv2.INTER_LINEAR))
+
+
 def _largest(faces):
     return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
@@ -197,6 +239,8 @@ class SkinToneMatcher:
         self.parser = parser          # optional FaceParser: same-frame face/ear/neck mask
         self.stats_every = stats_every
         self._i = 0
+        self.landmark_limit = False   # True: never recolour outside the eye/mouth-derived boundary
+        self._below = None
 
     def _body_mask(self, frame, face):
         """Body-skin mask at working resolution, aligned to the current frame."""
@@ -236,6 +280,10 @@ class SkinToneMatcher:
                 # Union with the (motion-compensated) MediaPipe mask: BiSeNet can label a shaved or
                 # bald scalp as background/hat, MediaPipe handles it; either one calling it skin wins.
                 prob = np.maximum(fm, prob) * zone + prob * (1 - zone)
+        self._below = None
+        if self.landmark_limit:
+            lim, self._below = _landmark_limit(frame.shape, face)
+            prob = prob * lim
         self.last_mask = prob
         return prob
 
@@ -269,6 +317,17 @@ class SkinToneMatcher:
         m = cv2.GaussianBlur(p * p * (3 - 2 * p), (15, 15), 0)[..., None] * self.strength   # no blocky edges
 
         lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if self._below is not None:
+            # Below the chin, only lift pixels that look like the measured skin: the neck column
+            # overlaps collars and shirt openings, which the parser can call "neck". (Not on the
+            # face itself: its highlights and shadows don't match the average tone.)
+            tol = np.maximum(np.array([3.5, 3.0, 3.0], np.float32) * t_std,
+                             np.array([18.0, 7.0, 7.0], np.float32))
+            z = (cv2.GaussianBlur(lab, (5, 5), 0) - t_mean) / tol
+            like = np.exp(-0.5 * (z * z).sum(axis=2))
+            gate = cv2.GaussianBlur(np.clip(like * 1.6, 0, 1), (9, 9), 0)
+            b = self._below[y1:y2, x1:x2]
+            m = m * (1 - b + b * gate)[..., None]
         # Dark, noisy webcam skin: lifting it far amplifies sensor noise into blotches. Smooth
         # lightness edge-preservingly and chroma more strongly (skin colour varies slowly).
         L = cv2.bilateralFilter(lab[..., 0], 7, 12, 5)

@@ -52,6 +52,10 @@ class Swapper:
             from enhance import FaceEnhancer
             self.enhancer = FaceEnhancer(weight=enhance, parser=self.parser)
         self.body_skin = body_skin   # MediaPipe body mask: ~120 ms of CPU per frame, only for neck/arms
+        if self.skin is not None:
+            # Never recolour beyond forehead/ears/chin as placed by the eyes and mouth: the parser's
+            # stray patches on hair, scalp, collar and background came and went frame to frame.
+            self.skin.landmark_limit = True
         self.local = threading.local()
         self.lock = threading.Lock()
 
@@ -121,13 +125,19 @@ def run_once(args, swap: Swapper):
     audio_q: collections.deque = collections.deque()     # decoded audio frames waiting for video
     last_vpts_s = -1.0
     last_pts = None
+    last_apts = None
     next_t = -1.0          # pacing: take frames on an even time grid so motion doesn't stutter
     shown = dropped = 0
     t_stat = time.time()
 
     def write_audio_up_to(t_s: float):
+        nonlocal last_apts
         while audio_q and (audio_q[0].pts * float(ain.time_base)) <= t_s:
-            for p in aout.encode(audio_q.popleft()):
+            af = audio_q.popleft()
+            if last_apts is not None and af.pts <= last_apts:   # source clock jumped back: skip
+                continue
+            last_apts = af.pts
+            for p in aout.encode(af):
                 out.mux(p)
 
     def drain(block: bool):
@@ -202,7 +212,7 @@ def main():
     ap.add_argument("--skin", type=float, default=1.0)
     ap.add_argument("--body-skin", action="store_true",
                     help="also recolour neck/arms/hands with MediaPipe (costs ~120 ms CPU per frame)")
-    ap.add_argument("--enhance", type=float, default=0.0,
+    ap.add_argument("--enhance", type=float, default=0.5,
                     help="GFPGAN face restoration strength (0 = off, 1 = full)")
     ap.add_argument("--max-lag", type=float, default=1.0,
                     help="seconds audio may run ahead of video before it is sent anyway")
