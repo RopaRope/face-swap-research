@@ -196,13 +196,13 @@ def main():
     ap.add_argument("--output", default="rtsp://127.0.0.1:8554/swapped")
     ap.add_argument("--fps", type=int, default=12,
                     help="frames per second taken from the webcam stream, evenly spaced")
-    ap.add_argument("--bitrate", type=int, default=2_500_000)
+    ap.add_argument("--bitrate", type=int, default=1_800_000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--det-size", type=int, default=320)
     ap.add_argument("--skin", type=float, default=1.0)
     ap.add_argument("--body-skin", action="store_true",
                     help="also recolour neck/arms/hands with MediaPipe (costs ~120 ms CPU per frame)")
-    ap.add_argument("--enhance", type=float, default=1.0,
+    ap.add_argument("--enhance", type=float, default=0.5,
                     help="GFPGAN face restoration strength (0 = off, 1 = full)")
     ap.add_argument("--max-lag", type=float, default=1.0,
                     help="seconds audio may run ahead of video before it is sent anyway")
