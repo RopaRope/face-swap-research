@@ -18,11 +18,21 @@ if ! command -v ffmpeg >/dev/null || ! ldconfig -p | grep -q libGL.so.1; then
 fi
 
 echo "== python packages"
+# Ubuntu 24.04 blocks system-wide pip (PEP 668): use a venv that still sees the image's PyTorch.
+VENV=/workspace/venv
+[ -x "$VENV/bin/python" ] || python3 -m venv --system-site-packages "$VENV"
+export PATH="$VENV/bin:$PATH"
 if [ ! -f /workspace/.faceswap-pip-done ]; then
   pip install -q --upgrade pip
-  pip install -q onnx onnxruntime-gpu opencv-python mediapipe==0.10.31 av \
-      scikit-image scipy tqdm prettytable easydict requests cython facexlib
+  pip install -q onnx "onnxruntime-gpu[cuda,cudnn]" opencv-python mediapipe==0.10.31 av \
+      scikit-image scipy tqdm prettytable easydict requests cython facexlib \
+      addict yapf lmdb future
   pip install -q --no-deps --no-build-isolation insightface==2.1
+  pip install -q --no-deps basicsr==1.4.2 gfpgan==1.3.8
+  # basicsr 1.4.2 imports names newer torchvision / Python removed
+  SP=$(python -c "import site;print(site.getsitepackages()[0])")
+  sed -i 's/torchvision\.transforms\.functional_tensor/torchvision.transforms.functional/' "$SP/basicsr/data/degradations.py"
+  sed -i 's/^from distutils.version import LooseVersion$/from packaging.version import Version as LooseVersion/' "$SP/basicsr/archs/arch_util.py"
   touch /workspace/.faceswap-pip-done
 fi
 
@@ -50,7 +60,14 @@ if [ ! -f "$PARSE" ]; then
   wget -q -O "$PARSE.part" https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_bisenet.pth
   echo "468e13ca13a9b43cc0881a9f99083a430e9c0a38abd935431d1c28ee94b26567  $PARSE.part" | sha256sum -c - && mv "$PARSE.part" "$PARSE"
 fi
-ln -sf "$PARSE" models/parsing_bisenet.pth 2>/dev/null || { mkdir -p models && ln -sf "$PARSE" models/parsing_bisenet.pth; }
+mkdir -p models && ln -sf "$PARSE" models/parsing_bisenet.pth
+# GFPGAN v1.4 face restoration (official TencentARC release)
+GFP="$DATA/models/GFPGANv1.4.pth"
+if [ ! -f "$GFP" ]; then
+  wget -q -O "$GFP.part" https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth
+  echo "e2cd4703ab14f4d01fd1383a8a8b266f9a5833dacee8e6a79d3bf21a1b6be5ad  $GFP.part" | sha256sum -c - && mv "$GFP.part" "$GFP"
+fi
+ln -sf "$GFP" models/GFPGANv1.4.pth
 
 echo "== MediaMTX media server"
 if [ ! -x /workspace/bin/mediamtx ]; then

@@ -20,8 +20,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import os
+
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_v, "4")   # pods expose ~96 cores but allow ~8: more threads only thrash
+
 import av
 import cv2
+
+cv2.setNumThreads(4)
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,15 +39,19 @@ from skin_tone import SkinSegmenter, SkinToneMatcher     # noqa: E402
 class Swapper:
     """The frame-aligned pipeline (same as `swap_live.py --aligned`), safe to call from threads."""
 
-    def __init__(self, source: str, det_size: int, skin_strength: float):
+    def __init__(self, source: str, det_size: int, skin_strength: float, enhance: float):
         print("providers:", sl.providers(), flush=True)
         self.app, self.swapper = sl.load_models(sl.DEFAULT_SWAPPER, det_size, fp16=False)
         self.src = sl.source_face(self.app, source)
         self.parser = sl.load_parser() if skin_strength > 0 else None
         self.skin = (SkinToneMatcher(cv2.imread(source), self.src, strength=skin_strength, live=False,
                                      parser=self.parser) if skin_strength > 0 else None)
+        self.enhancer = None
+        if enhance > 0:     # GFPGAN restores the 128 px swap to a sharp 512 px face, every frame
+            from enhance import FaceEnhancer
+            self.enhancer = FaceEnhancer(weight=enhance, parser=self.parser)
         self.local = threading.local()
-        self.lock = threading.Lock()        # skin stats + face parser are shared
+        self.lock = threading.Lock()
 
     def _segmenter(self) -> SkinSegmenter:
         if not hasattr(self.local, "seg"):
@@ -50,11 +61,13 @@ class Swapper:
     def __call__(self, bgr: np.ndarray) -> np.ndarray:
         faces = sl.detect(self.app, bgr)
         body = self._segmenter().skin_prob(bgr) if self.skin is not None and faces else None
-        if self.skin is not None and faces:
-            with self.lock:
-                out, _ = sl.swap_frame(bgr, self.app, self.swapper, self.src, faces, skin=self.skin, body=body)
-        else:
-            out, _ = sl.swap_frame(bgr, self.app, self.swapper, self.src, faces)
+        out = bgr
+        if faces:
+            if self.skin is not None:
+                with self.lock:             # only the skin-tone statistics are shared state
+                    out = self.skin.apply(bgr, faces, body=body)
+            # swap + GFPGAN run in parallel across workers (ONNX Runtime / PyTorch are thread-safe)
+            out, _ = sl.swap_frame(out, self.app, self.swapper, self.src, faces, enhancer=self.enhancer)
         return sl.watermark(out)            # always: every frame says it is synthetic
 
 
@@ -137,7 +150,7 @@ def run_once(args, swap: Swapper):
                     dropped += 1
                     continue
                 pending.append((vf.pts, pool.submit(swap, vf.to_ndarray(format="bgr24"))))
-            drain(block=len(pending) >= args.workers * 2)
+            drain(block=False)      # never wait here: a full queue drops frames, so delay stays bounded
             if time.time() - t_stat > 5:
                 print(f"{shown / (time.time() - t_stat):.1f} fps out, {dropped} dropped, "
                       f"{len(pending)} in flight", flush=True)
@@ -162,14 +175,16 @@ def main():
     ap.add_argument("--input", default="rtsp://127.0.0.1:8554/live")
     ap.add_argument("--output", default="rtsp://127.0.0.1:8554/swapped")
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--bitrate", type=int, default=2_500_000)
+    ap.add_argument("--bitrate", type=int, default=1_200_000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--det-size", type=int, default=320)
     ap.add_argument("--skin", type=float, default=1.0)
+    ap.add_argument("--enhance", type=float, default=1.0,
+                    help="GFPGAN face restoration strength (0 = off, 1 = full)")
     ap.add_argument("--max-lag", type=float, default=1.0,
                     help="seconds audio may run ahead of video before it is sent anyway")
     args = ap.parse_args()
-    swap = Swapper(args.source, args.det_size, args.skin)
+    swap = Swapper(args.source, args.det_size, args.skin, args.enhance)
     swap(np.zeros((720, 1280, 3), np.uint8))       # warm up GPU kernels before the stream starts
     print("ready: waiting for OBS to stream to path 'live'", flush=True)
     while True:

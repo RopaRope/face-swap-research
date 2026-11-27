@@ -263,13 +263,26 @@ class SkinToneMatcher:
             return frame
         y1, y2, x1, x2 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
         roi = frame[y1:y2, x1:x2]
-        m = prob[y1:y2, x1:x2, None] * self.strength
+        # Firm up the mask: half-covered pixels (hair edge, shadowed hands, scalp shine) got only
+        # half the lift and showed as orange/brown patches when the tones are far apart.
+        p = np.clip((prob[y1:y2, x1:x2] - 0.15) / 0.45, 0, 1)
+        m = cv2.GaussianBlur(p * p * (3 - 2 * p), (15, 15), 0)[..., None] * self.strength   # no blocky edges
 
         lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB).astype(np.float32)
-        ratio_l = float(np.clip(self.src_std[0] / t_std[0], 0.6, 1.6))
+        # Dark, noisy webcam skin: lifting it far amplifies sensor noise into blotches. Smooth
+        # lightness edge-preservingly and chroma more strongly (skin colour varies slowly).
+        L = cv2.bilateralFilter(lab[..., 0], 7, 12, 5)
+        ab = cv2.GaussianBlur(lab[..., 1:], (9, 9), 0)
+        ratio_l = float(np.clip(self.src_std[0] / t_std[0], 0.7, 1.3))
         new = np.empty_like(lab)
-        new[..., 0] = (lab[..., 0] - t_mean[0]) * ratio_l + self.src_mean[0]
-        new[..., 1:] = lab[..., 1:] - t_mean[1:] + self.src_mean[1:]
+        nl = (L - t_mean[0]) * ratio_l + self.src_mean[0]
+        knee = min(self.src_mean[0] + 1.5 * self.src_std[0], 235.0)
+        over = np.maximum(nl - knee, 0)       # roll highlights off smoothly instead of clipping
+        nl = np.where(nl > knee, knee + (255 - knee) * (1 - np.exp(-over / (255 - knee))), nl)
+        new[..., 0] = nl
+        # Fade the colour shift out in near-white highlights so shine doesn't turn orange.
+        fade = np.clip((250 - nl) / 40, 0, 1)[..., None]
+        new[..., 1:] = ab + (self.src_mean[1:] - t_mean[1:]) * fade
         lab += (new - lab) * m
         out = frame.copy()
         out[y1:y2, x1:x2] = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)

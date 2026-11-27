@@ -72,7 +72,7 @@ class FaceEnhancer:
         self.gfpgan.load_state_dict(sd.get("params_ema", sd.get("params", sd)), strict=True)
         self.gfpgan.eval().to(self.dev)
         # fp16 on Apple GPU: 327 -> 275 ms per face on an M1 (CoreML/ONNX paths were no faster).
-        self.dtype = torch.float16 if self.dev.type == "mps" else torch.float32
+        self.dtype = torch.float16 if self.dev.type == "mps" else torch.float32   # fp16 on CUDA returned the input unrestored
         self.gfpgan.to(self.dtype)
 
         self.parser = parser or FaceParser()
