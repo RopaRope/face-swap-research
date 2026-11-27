@@ -39,6 +39,9 @@ ROOT = paths.ROOT
 DEFAULT_SWAPPER = paths.model("inswapper_128.onnx")
 LABEL = ("SYNTHETIC - AI FACE SWAP (research)",
          "Face-swapped video - NOT the real person")
+# Used if LABEL is ever blanked or shortened by an edit: the call output always says it's synthetic.
+_DEFAULT_LABEL = ("SYNTHETIC - AI FACE SWAP (research)",
+                  "Face-swapped video - NOT the real person")
 
 
 def providers() -> list:
@@ -103,17 +106,18 @@ def source_face(app: FaceAnalysis, path: str):
 
 def watermark(frame: np.ndarray) -> np.ndarray:
     """Burn the disclosure label into the top-left corner. Applied to every output, never optional."""
+    label = LABEL if isinstance(LABEL, tuple) and all(t.strip() for t in LABEL) else _DEFAULT_LABEL
     h, w = frame.shape[:2]
     scale = max(0.55, w / 1280 * 0.8)
     thick = max(1, int(2 * scale))
-    sizes = [cv2.getTextSize(t, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)[0] for t in LABEL]
+    sizes = [cv2.getTextSize(t, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)[0] for t in label]
     tw = max(s[0] for s in sizes)
     th = sizes[0][1]
     gap = int(th * 0.7)
     x, y0 = 12, 12
-    y1 = y0 + len(LABEL) * (th + gap) + gap
+    y1 = y0 + len(label) * (th + gap) + gap
     cv2.rectangle(frame, (x - 6, y0 - 4), (x + tw + 8, y1), (0, 0, 0), -1)
-    for i, t in enumerate(LABEL):
+    for i, t in enumerate(label):
         y = y0 + gap + th + i * (th + gap)
         color = (0, 0, 255) if i == 0 else (255, 255, 255)
         cv2.putText(frame, t, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
