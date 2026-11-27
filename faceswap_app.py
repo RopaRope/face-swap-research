@@ -50,6 +50,8 @@ NOTICE = f"""
 
   * Use only faces of people who have agreed to take part.
   * Tell everyone on a call that the video is face-swapped.
+  * Every frame carries the label "SYNTHETIC - AI FACE SWAP (research) /
+    Face-swapped video - NOT the real person". It cannot be turned off.
   * The face models are licensed for non-commercial research only.
 ==========================================================================
 """

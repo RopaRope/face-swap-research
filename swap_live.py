@@ -37,7 +37,8 @@ from skin_tone import SkinToneMatcher
 
 ROOT = paths.ROOT
 DEFAULT_SWAPPER = paths.model("inswapper_128.onnx")
-LABEL = ("video")
+LABEL = ("SYNTHETIC - AI FACE SWAP (research)",
+         "Face-swapped video - NOT the real person")
 
 
 def providers() -> list:
