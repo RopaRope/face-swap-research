@@ -106,7 +106,8 @@ def run_once(args, swap: Swapper):
     vout.width, vout.height = vin.codec_context.width, vin.codec_context.height
     vout.pix_fmt = "yuv420p"
     vout.bit_rate = args.bitrate
-    vout.options = {"preset": "veryfast", "tune": "zerolatency", "g": str(args.fps)}
+    # Keyframe every 4 s: at 1/s each one was a visible once-a-second pulse at this bitrate.
+    vout.options = {"preset": "veryfast", "tune": "zerolatency", "g": str(args.fps * 4)}
     vout.time_base = vin.time_base
     vout.codec_context.time_base = vin.time_base   # input clock: paced frames never share a tick
     aout = None
@@ -195,7 +196,7 @@ def main():
     ap.add_argument("--output", default="rtsp://127.0.0.1:8554/swapped")
     ap.add_argument("--fps", type=int, default=12,
                     help="frames per second taken from the webcam stream, evenly spaced")
-    ap.add_argument("--bitrate", type=int, default=1_200_000)
+    ap.add_argument("--bitrate", type=int, default=2_500_000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--det-size", type=int, default=320)
     ap.add_argument("--skin", type=float, default=1.0)
