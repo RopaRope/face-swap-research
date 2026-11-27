@@ -84,7 +84,8 @@ def open_input(url: str):
         try:
             c = av.open(url, options={"rtsp_transport": "tcp", "fflags": "nobuffer",
                                       "flags": "low_delay", "max_delay": "0"}, timeout=(10, 10))
-            if c.streams.video:
+            # A stream that is still starting up can report 0x0; the encoder then hangs.
+            if c.streams.video and c.streams.video[0].codec_context.width > 0:
                 return c
             c.close()
         except av.error.FFmpegError as e:
